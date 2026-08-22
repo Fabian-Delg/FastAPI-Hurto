@@ -1,6 +1,10 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from database import crear_tabla, get_connection
-from models import Tipo_Hurto, Hurto
+from models import Tipo_Hurto, Hurto, UsuarioRegistro, Token
+from auth import hashear_password, verificar_password, crear_token, verificar_token
+from auth import obtener_usuario_actual
+import psycopg
 
 app = FastAPI()
 
@@ -10,10 +14,54 @@ crear_tabla()
 def inicio():
     return {"mensaje":"API funcionando correctamente"}
 
+#Usuario
+
+@app.post("/registro")
+def registrar_usuario(usuario: UsuarioRegistro):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    password_hash = hashear_password(usuario.password)
+
+    try:
+        cur.execute(
+            "INSERT INTO usuarios (username, password_hash) VALUES (%s, %s) RETURNING id",
+            (usuario.username, password_hash)
+        )
+        nuevo_id = cur.fetchone()["id"]
+        conn.commit()
+    except psycopg.errors.UniqueViolation:
+        conn.rollback()
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=400, detail="Ese nombre de usuario ya existe")
+
+    cur.close()
+    conn.close()
+    return {"mensaje": "Usuario registrado", "id": nuevo_id}
+
+@app.post("/login", response_model=Token)
+def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, username, password_hash FROM usuarios WHERE username = %s",
+        (form_data.username,)
+    )
+    usuario = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not usuario or not verificar_password(form_data.password, usuario["password_hash"]):
+        raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
+
+    token = crear_token({"sub": usuario["username"], "id": usuario["id"]})
+    return {"access_token": token, "token_type": "bearer"}
+
 # Tipos de Hurto
 
 @app.post("/tiposHurto")
-def crear_tipo_hurto(tipo_hurto:Tipo_Hurto):
+def crear_tipo_hurto(tipo_hurto:Tipo_Hurto, usuario_actual: dict = Depends(obtener_usuario_actual)):
     conn = get_connection()
     cur = conn.cursor()
 
@@ -36,7 +84,7 @@ def crear_tipo_hurto(tipo_hurto:Tipo_Hurto):
     conn.commit()
     cur.close()
     conn.close()
-    return {"mensaje":"Tipo de hurto creado", "id":new_id}
+    return {"mensaje":"Tipo de hurto creado", "id":new_id, "creado_por": usuario_actual["sub"]}
 
 @app.get("/tiposHurto")
 def listar_tipos_hurto():
@@ -70,7 +118,7 @@ def buscar_tipo_hurto(id: int):
     raise HTTPException(status_code=404, detail="El tipo de hurto no existe")
 
 @app.delete("/tiposHurto/{id}")
-def eliminar_tipo_hurto(id: int):
+def eliminar_tipo_hurto(id: int, usuario_actual: dict = Depends(obtener_usuario_actual)):
     conn = get_connection()
     cur = conn.cursor()
 
@@ -101,7 +149,7 @@ def eliminar_tipo_hurto(id: int):
 # Hurto
 
 @app.post("/hurtos")
-def crear_hurto(hurto:Hurto):
+def crear_hurto(hurto:Hurto, usuario_actual: dict = Depends(obtener_usuario_actual)):
     conn = get_connection()
     cur = conn.cursor()
 
@@ -120,7 +168,7 @@ def crear_hurto(hurto:Hurto):
     conn.commit()
     cur.close()
     conn.close()
-    return {"mensaje":"Hurto registrado", "id":new_id}
+    return {"mensaje":"Hurto registrado", "id":new_id, "creado_por": usuario_actual["sub"]}
 
 @app.get("/hurtos")
 def lista_hurtos():
@@ -197,7 +245,7 @@ def actualizar_hurtos(id: int, hurto:Hurto):
 
 
 @app.delete("/hurtos/{id}")
-def eliminar_hurto(id: int):
+def eliminar_hurto(id: int, usuario_actual: dict = Depends(obtener_usuario_actual)):
     conn = get_connection()
     cur = conn.cursor()
 

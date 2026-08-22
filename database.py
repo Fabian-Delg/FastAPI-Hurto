@@ -33,6 +33,13 @@ def crear_tabla():
                 ON DELETE RESTRICT
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS usuarios(
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(50) NOT NULL UNIQUE,
+            password_hash VARCHAR(200) NOT NULL 
+        )
+    """)
     conn.commit()
     cur.close()
     conn.close()
